@@ -1,0 +1,291 @@
+#!/bin/bash
+
+# ==============================================
+# 自动配置脚本 - 最终修正版
+# 确保能正确修改 config.json 和 ritual.sh
+# ==============================================
+
+# 配置部分
+DEFAULT_VALUE="263590"
+RITUAL_COMMAND_PATH="$HOME/Desktop/ritual.command"
+WORK_DIR="$HOME/infernet-container-starter/deploy"
+
+# 美观的打印函数
+print_header() {
+    echo -e "\n\033[34m======================================\033[0m"
+    echo -e "\033[34m $1 \033[0m"
+    echo -e "\033[34m======================================\033[0m"
+}
+
+print_success() {
+    echo -e "\033[32m✅ $1\033[0m"
+    sleep 1
+}
+
+print_error() {
+    echo -e "\033[31m❌ 错误：$1\033[0m"
+    sleep 1
+}
+
+print_info() {
+    echo -e "\033[36mℹ️ $1\033[0m"
+    sleep 1
+}
+
+# 1. 检查Docker状态
+check_docker() {
+    if ! docker ps &> /dev/null; then
+        print_info "Docker未运行，尝试启动..."
+        
+        if ! open -a Docker; then
+            print_error "无法启动Docker，请确认已安装Docker Desktop"
+            echo "请从官网下载：https://www.docker.com/products/docker-desktop/"
+            exit 1
+        fi
+        
+        print_info "等待Docker启动(约10秒)..."
+        for i in {1..10}; do
+            sleep 1
+            if docker ps &> /dev/null; then
+                print_success "Docker已成功启动"
+                return 0
+            fi
+        done
+        
+        print_error "Docker启动超时，请手动检查"
+        exit 1
+    else
+        print_success "Docker已在运行"
+    fi
+}
+
+# 2. 检查jq工具
+check_jq() {
+    if ! command -v jq &> /dev/null; then
+        print_info "jq工具未安装，尝试自动安装..."
+        
+        if ! command -v brew &> /dev/null; then
+            print_error "Homebrew未安装，请先安装Homebrew"
+            echo "请访问 https://brew.sh 获取安装指南"
+            exit 1
+        fi
+        
+        if brew install jq; then
+            print_success "jq安装成功！"
+        else
+            print_error "jq安装失败，请手动运行: brew install jq"
+            exit 1
+        fi
+    else
+        print_success "jq工具已安装"
+    fi
+}
+
+# 3. 获取用户输入
+get_user_input() {
+    echo -e "\n\033[33m📝 是否要手动输入 starting_sub_id 值? (默认: ${DEFAULT_VALUE})\033[0m"
+    echo -e "\033[33m您有2秒时间选择(y)，超时将使用默认值\033[0m"
+    read -t 2 -p "➡️ 请输入y手动输入，或直接回车使用默认值: " USER_CHOICE
+    
+    if [[ "$USER_CHOICE" == "y" || "$USER_CHOICE" == "Y" ]]; then
+        read -p "请输入新的 starting_sub_id 值: " NEW_VALUE
+        print_info "将使用手动输入值: ${NEW_VALUE}"
+    else
+        NEW_VALUE=$DEFAULT_VALUE
+        print_info "将使用默认值: ${NEW_VALUE}"
+    fi
+}
+
+
+# 修改ritual.sh文件
+modify_ritual_sh() {
+    local ritual_sh_path="$1"
+    local new_value="$2"
+    
+    print_info "正在修改: $ritual_sh_path"
+    
+    if [[ ! -f "$ritual_sh_path" ]]; then
+        print_error "找不到文件: $ritual_sh_path"
+        exit 1
+    fi
+    
+    # 显示原始文件内容（调试用）
+    print_info "原始文件内容:"
+    grep -A 2 "starting_sub_id" "$ritual_sh_path" || echo "未找到starting_sub_id相关内容"
+    
+    # 备份原文件
+    cp "$ritual_sh_path" "${ritual_sh_path}.bak"
+    
+    # 修改jq命令中的值
+    if ! perl -i -pe "s/\.chain\.snapshot_sync\.starting_sub_id = \d+/\.chain\.snapshot_sync\.starting_sub_id = ${new_value}/g" "$ritual_sh_path"; then
+        print_error "修改jq命令失败"
+        exit 1
+    fi
+    
+    # 修改echo语句中的值
+    if ! perl -i -pe "s/echo \"- starting_sub_id: \d+\"/echo \"- starting_sub_id: ${new_value}\"/g" "$ritual_sh_path"; then
+        print_error "修改echo语句失败"
+        exit 1
+    fi
+    
+    # 显示修改后内容（调试用）
+    print_info "修改后文件内容:"
+    grep -A 2 "starting_sub_id" "$ritual_sh_path" || echo "未找到starting_sub_id相关内容"
+    
+    # 验证两处修改
+    if grep -q "\.chain\.snapshot_sync\.starting_sub_id = ${new_value}" "$ritual_sh_path" && \
+       grep -q "echo \"- starting_sub_id: ${new_value}\"" "$ritual_sh_path"; then
+        print_success "修改成功！备份文件: ${ritual_sh_path}.bak"
+    else
+        print_error "验证失败: 文件内容未正确修改"
+        print_info "请检查文件中 starting_sub_id 的相关语句"
+        exit 1
+    fi
+}
+
+# 5. 修改config.json文件
+modify_config_json() {
+    local config_path="$1"
+    local new_value="$2"
+    
+    print_info "正在修改: $config_path"
+    
+    if [[ ! -f "$config_path" ]]; then
+        print_error "找不到配置文件: $config_path"
+        print_info "尝试在以下位置查找:"
+        find "$WORK_DIR" -name "config.json" -print 2>/dev/null
+        exit 1
+    fi
+    
+    # 备份原文件
+    cp "$config_path" "${config_path}.bak"
+    
+    # 修改文件内容
+    if ! jq --arg new_val "$new_value" '.chain.snapshot_sync.starting_sub_id = ($new_val | tonumber)' "$config_path" > temp.json; then
+        print_error "修改config.json失败"
+        exit 1
+    fi
+    
+    mv temp.json "$config_path"
+    print_success "config.json修改成功"
+    
+    # 验证修改
+    if jq -e ".chain.snapshot_sync.starting_sub_id == ${new_value}" "$config_path" >/dev/null; then
+        print_success "验证: 修改已生效"
+    else
+        print_error "验证失败: 文件内容未正确修改"
+        exit 1
+    fi
+}
+
+# 6. 执行ritual.sh
+run_ritual_sh() {
+    local ritual_sh_path="$1"
+    
+    print_info "正在执行ritual.sh..."
+    
+    if [[ ! -f "$ritual_sh_path" ]]; then
+        print_error "找不到文件: $ritual_sh_path"
+        exit 1
+    fi
+    
+    if ! chmod +x "$ritual_sh_path"; then
+        print_error "无法设置执行权限"
+        exit 1
+    fi
+    
+    cd "$(dirname "$ritual_sh_path")" || {
+        print_error "无法切换到ritual.sh所在目录"
+        exit 1
+    }
+    
+    if ! ./ritual.sh; then
+        print_error "执行ritual.sh失败"
+        exit 1
+    fi
+    
+    print_success "ritual.sh执行完成"
+}
+
+# 获取ritual.sh路径
+get_ritual_sh_path() {
+    if [[ ! -f "$RITUAL_COMMAND_PATH" ]]; then
+        print_error "找不到ritual.command文件: $RITUAL_COMMAND_PATH"
+        exit 1
+    fi
+    
+    # 从ritual.command中提取ritual.sh路径
+    RL_SWARM_PATH=$(grep -o 'cd "[^"]*"' "$RITUAL_COMMAND_PATH" | sed 's/cd "//;s/"//')
+    if [[ -z "$RL_SWARM_PATH" ]]; then
+        print_error "无法从ritual.command中提取ritual.sh路径"
+        print_info "ritual.command内容:"
+        cat "$RITUAL_COMMAND_PATH"
+        exit 1
+    fi
+    
+    RITUAL_SH_PATH="$RL_SWARM_PATH/ritual.sh"
+    echo "$RITUAL_SH_PATH"
+}
+
+# 获取config.json路径
+get_config_path() {
+    CONFIG_PATH="$WORK_DIR/config.json"
+    
+    if [[ ! -f "$CONFIG_PATH" ]]; then
+        print_error "默认位置找不到config.json: $CONFIG_PATH"
+        print_info "尝试自动查找config.json..."
+        
+        FOUND_CONFIG=$(find "$HOME" -name "config.json" -print -quit 2>/dev/null)
+        if [[ -n "$FOUND_CONFIG" ]]; then
+            print_info "找到config.json在: $FOUND_CONFIG"
+            echo "$FOUND_CONFIG"
+            return
+        else
+            print_error "无法找到config.json文件"
+            exit 1
+        fi
+    fi
+    
+    echo "$CONFIG_PATH"
+}
+
+# 主程序
+main() {
+    print_header "开始执行自动化配置"
+    
+    # 1. 检查Docker
+    check_docker
+    
+    # 2. 检查jq工具
+    check_jq
+    
+    # 3. 获取用户输入
+    get_user_input
+    
+    # 获取ritual.sh实际路径
+    RITUAL_SH_PATH=$(get_ritual_sh_path)
+    print_info "找到ritual.sh路径: $RITUAL_SH_PATH"
+    
+    # 4. 修改ritual.sh
+    modify_ritual_sh "$RITUAL_SH_PATH" "$NEW_VALUE"
+    
+    # 获取config.json路径
+    CONFIG_PATH=$(get_config_path)
+    print_info "找到config.json路径: $CONFIG_PATH"
+    
+    # 5. 修改config.json
+    modify_config_json "$CONFIG_PATH" "$NEW_VALUE"
+    
+    # 6. 执行ritual.sh
+    run_ritual_sh "$RITUAL_SH_PATH"
+    
+    print_header "所有操作已完成 🎉"
+    echo -e "\033[32m✔ 设置的starting_sub_id值: ${NEW_VALUE}\033[0m"
+    echo -e "\033[32m✔ ritual.sh路径: ${RITUAL_SH_PATH}\033[0m"
+    echo -e "\033[32m✔ config.json路径: ${CONFIG_PATH}\033[0m"
+    echo -e "\033[32m✔ 完成时间: $(date)\033[0m"
+    echo -e "\n\033[33m⚠️ 注意：如果遇到任何问题，请检查备份文件(.bak)\033[0m"
+}
+
+# 执行主程序
+main
