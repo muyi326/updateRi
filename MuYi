@@ -6,7 +6,7 @@
 # ==============================================
 
 # 配置部分
-DEFAULT_VALUE="266130"
+DEFAULT_VALUE="266160"
 RITUAL_COMMAND_PATH="$HOME/Desktop/ritual.command"
 WORK_DIR="$HOME/infernet-container-starter/deploy"
 
